@@ -1,57 +1,128 @@
-function processFullLogic(rows) {
-    // ดึงข้อมูลพื้นฐาน (อ้างอิงตำแหน่งคอลัมน์จากคู่มือ)
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>เครื่องมือตรวจสอบข้อมูลซ้ำ - SMART Patrol</title>
+    <style>
+        body { font-family: 'Sarabun', sans-serif; padding: 20px; background-color: #f8f9fa; }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .header { text-align: center; border-bottom: 3px solid #28a745; margin-bottom: 25px; padding-bottom: 10px; }
+        .upload-area { border: 2px dashed #28a745; padding: 40px; text-align: center; cursor: pointer; background: #e9f7ef; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 25px; background: white; }
+        th, td { border: 1px solid #dee2e6; padding: 12px; text-align: left; }
+        th { background-color: #28a745; color: white; text-align: center; }
+        .count-cell { text-align: center; font-weight: bold; color: #d9534f; font-size: 1.1em; }
+        .wp-list { font-size: 0.85em; color: #555; word-break: break-all; max-width: 400px; }
+        .status-cell { text-align: center; font-weight: bold; color: #dc3545; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h2>เครื่องมือตรวจสอบการรายงานข้อมูลซ้ำ (SMART Patrol)</h2>
+        <p>อ้างอิงคอลัมน์: A (รหัสเส้น), G (รหัสเวย์พอยท์), H (วันที่), J (X), K (Y)</p>
+    </div>
+    
+    <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+        <strong>คลิกเพื่ออัปโหลดไฟล์ .csv จากโปรแกรม SMART</strong>
+        <input type="file" id="fileInput" accept=".csv" style="display:none">
+    </div>
+
+    <div id="resultArea"></div>
+</div>
+
+<script>
+document.getElementById('fileInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsText(file, "TIS-620"); // รองรับภาษาไทยจากไฟล์ SMART
+
+    reader.onload = function(event) {
+        const rows = event.target.result.split(/\r?\n/).map(row => row.split(','));
+        processSmartData(rows);
+    };
+});
+
+function processSmartData(rows) {
+    if (rows.length < 2) return;
+
+    // 1. ดึงข้อมูลและสร้าง XY (อ้างอิงคอลัมน์ตามคู่มือ)
     let data = rows.slice(1).filter(r => r.length > 10).map(r => ({
-        id: r[0]?.trim(),        // คอลัมน์ A: รหัสเส้น
-        waypointId: r[6]?.trim(), // คอลัมน์ G: รหัสเวย์พอยท์
-        date: r[7]?.trim(),      // คอลัมน์ H: วันที่
-        xy: (r[9]?.trim() || "") + (r[10]?.trim() || "") // คอลัมน์ L: ค่าพิกัดรวม
+        patrolId: r[0]?.trim(),    // คอลัมน์ A: รหัสเส้นลาดตระเวน
+        waypointId: r[6]?.trim(),  // คอลัมน์ G: รหัสเวย์พอยท์
+        date: r[7]?.trim(),        // คอลัมน์ H: วันที่ของเวย์พอยท์
+        xy: (r[9]?.trim() || "") + (r[10]?.trim() || "") // คอลัมน์ L: ค่า XY
     }));
 
-    // เรียงลำดับตามพิกัด XY และรหัสเส้น
-    data.sort((a, b) => a.xy.localeCompare(b.xy) || a.id.localeCompare(b.id));
+    // 2. เรียงลำดับตาม XY และวันที่ (เพื่อให้จุดที่พิกัดเหมือนกันมาอยู่ใกล้กัน)
+    data.sort((a, b) => a.xy.localeCompare(b.xy) || a.date.localeCompare(b.date));
 
-    let pairSummary = {}; // เก็บสรุปผลแยกตามคู่เส้น
+    // 3. วิเคราะห์หาคู่เส้นที่ซ้ำกัน
+    let pairResults = {};
 
     for (let i = 0; i < data.length; i++) {
-        let curr = data[i];
-        let next = data[i+1];
+        let current = data[i];
         
-        // ตรรกะจับคู่เส้นที่พิกัดตรงกันแต่ต่างวัน (ตามหน้า 10 และ 12)
-        if (next && curr.xy === next.xy && curr.date !== next.date) {
-            let pairName = [curr.id, next.id].sort().join(" กับ ");
+        // เปรียบเทียบกับจุดอื่นๆ ในไฟล์ที่มีพิกัดเดียวกันแต่คนละวันที่ (Logic หน้า 10)
+        for (let j = i + 1; j < data.length; j++) {
+            let next = data[j];
             
-            if (!pairSummary[pairName]) {
-                pairSummary[pairName] = { count: 0, waypoints: new Set() };
+            // ถ้าพิกัด (XY) ต่างกันแล้ว ให้หยุดหาในกลุ่มนี้
+            if (current.xy !== next.xy) break;
+
+            // ถ้าพิกัดเดียวกันแต่ต่างวันที่ และคนละรหัสเส้น (เงื่อนไขการซ้ำ)
+            if (current.date !== next.date && current.patrolId !== next.patrolId) {
+                let pairKey = [current.patrolId, next.patrolId].sort().join(", ");
+                
+                if (!pairResults[pairKey]) {
+                    pairResults[pairKey] = { count: 0, waypoints: new Set() };
+                }
+                
+                pairResults[pairKey].count += 1;
+                if (current.waypointId) pairResults[pairKey].waypoints.add(current.waypointId);
+                if (next.waypointId) pairResults[pairKey].waypoints.add(next.waypointId);
             }
-            
-            pairSummary[pairName].count += 1; // นับจำนวนจุดที่พบ
-            pairSummary[pairName].waypoints.add(curr.waypointId); // เก็บรายการเวย์พอยท์
-            pairSummary[pairName].waypoints.add(next.waypointId);
         }
     }
 
-    displayFinalReport(pairSummary);
+    renderTable(pairResults);
 }
 
-function displayFinalReport(pairSummary) {
-    const resultDiv = document.getElementById('result');
-    let html = '<h3>สรุปคู่เส้นที่พบข้อมูลซ้ำ (เกณฑ์ > 20 จุด)</h3>';
-    html += '<table><tr><th>คู่เส้นที่ทับซ้อน</th><th>จำนวนจุด (count)</th><th>รหัสเวย์พอยท์ที่เกี่ยวข้อง</th><th>สถานะ</th></tr>';
+function renderTable(results) {
+    const area = document.getElementById('resultArea');
+    let html = '<table><thead><tr>' +
+               '<th>คู่เส้นลาดตระเวน (เส้นซ้ำ)</th>' +
+               '<th>จำนวนจุดที่ซ้ำ (count)</th>' +
+               '<th>รหัสเวย์พอยท์ที่พบการซ้ำ</th>' +
+               '<th>สถานะ</th>' +
+               '</tr></thead><tbody>';
 
-    let found = false;
-    for (let [pair, info] of Object.entries(pairSummary)) {
-        if (info.count > 20) { // กรองเฉพาะที่ซ้ำมากกว่า 20 จุดตามคู่มือหน้า 14
+    let foundData = false;
+    for (const [pair, info] of Object.entries(results)) {
+        // กรองเฉพาะที่ซ้ำมากกว่า 20 จุดตามเกณฑ์หน้า 14
+        if (info.count >= 20) {
+            const wpList = Array.from(info.waypoints).sort().join(", ");
             html += `<tr>
-                <td>${pair}</td>
-                <td style="color:red; font-weight:bold;">${info.count}</td>
-                <td style="font-size: 0.8em; color: #555;">${Array.from(info.waypoints).join(", ")}</td>
-                <td>ต้องตรวจสอบใน SMART</td>
+                <td><b>${pair}</b></td>
+                <td class="count-cell">${info.count}</td>
+                <td class="wp-list">${wpList}</td>
+                <td class="status-cell">ต้องตรวจสอบใน SMART</td>
             </tr>`;
-            found = true;
+            foundData = true;
         }
     }
 
-    if (!found) html += '<tr><td colspan="4">ไม่พบข้อมูลซ้ำเกินเกณฑ์ที่กำหนด</td></tr>';
-    html += '</table>';
-    resultDiv.innerHTML = html;
+    if (!foundData) {
+        html += '<tr><td colspan="4" style="text-align:center;">ไม่พบข้อมูลซ้ำที่เกินเกณฑ์ 20 จุด</td></tr>';
+    }
+
+    html += '</tbody></table>';
+    area.innerHTML = html;
 }
+</script>
+
+</body>
+</html>
