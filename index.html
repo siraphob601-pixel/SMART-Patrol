@@ -2,18 +2,19 @@
 <html lang="th">
 <head>
     <meta charset="UTF-8">
-    <title>SMART Patrol - Duplicate Checker (Waypoint Pair Mode)</title>
+    <title>SMART Patrol - Duplicate Checker (Full Detail Mode)</title>
     <style>
         body { font-family: 'Sarabun', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .container { max-width: 1300px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         .header { text-align: center; border-bottom: 3px solid #28a745; margin-bottom: 25px; padding-bottom: 10px; }
         .upload-area { border: 2px dashed #28a745; padding: 40px; text-align: center; cursor: pointer; background: #e9f7ef; border-radius: 8px; }
         table { width: 100%; border-collapse: collapse; margin-top: 25px; }
         th, td { border: 1px solid #dee2e6; padding: 12px; text-align: left; vertical-align: top; }
         th { background-color: #28a745; color: white; text-align: center; }
-        .count-cell { text-align: center; font-weight: bold; color: #d9534f; }
-        .wp-pair-list { font-size: 0.85em; color: #444; line-height: 1.6; }
-        .wp-item { display: block; margin-bottom: 4px; border-bottom: 1px dotted #ccc; padding-bottom: 2px; }
+        .count-cell { text-align: center; font-weight: bold; color: #d9534f; font-size: 1.2em; }
+        .wp-pair-list { font-size: 0.82em; color: #333; line-height: 1.6; max-height: 400px; overflow-y: auto; display: block; }
+        .wp-item { display: block; margin-bottom: 4px; border-bottom: 1px dotted #ccc; padding: 4px 0; }
+        .date-info { color: #0056b3; font-weight: bold; }
         .status-cell { text-align: center; font-weight: bold; color: #dc3545; }
     </style>
 </head>
@@ -21,118 +22,3 @@
 
 <div class="container">
     <div class="header">
-        <h2>เครื่องมือตรวจสอบการรายงานข้อมูลซ้ำ (ระบุคู่เวย์พอยท์)</h2>
-        <p>แสดงผลลัพธ์: คู่เส้นที่มีจุดซ้ำ >= 20 จุด พร้อมระบุรหัสเวย์พอยท์ที่ตรงกันรายจุด </p>
-    </div>
-    
-    <div class="upload-area" onclick="document.getElementById('fileInput').click()">
-        <strong>คลิกเพื่ออัปโหลดไฟล์ .csv จากโปรแกรม SMART</strong>
-        <input type="file" id="fileInput" accept=".csv" style="display:none">
-    </div>
-
-    <div id="resultArea"></div>
-</div>
-
-<script>
-document.getElementById('fileInput').addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.readAsText(file, "TIS-620"); // รองรับภาษาไทย [cite: 128]
-
-    reader.onload = function(event) {
-        const rows = event.target.result.split(/\r?\n/).map(row => row.split(','));
-        processSmartData(rows);
-    };
-});
-
-function processSmartData(rows) {
-    if (rows.length < 2) return;
-
-    // 1. ดึงข้อมูลพื้นฐาน [cite: 221, 277]
-    // A: รหัสเส้น, G: รหัสเวย์พอยท์, H: วันที่, J: X, K: Y
-    let data = rows.slice(1).filter(r => r.length > 10).map(r => ({
-        patrolId: r[0]?.trim(),
-        waypointId: r[6]?.trim(),
-        date: r[7]?.trim(),
-        xy: (r[9]?.trim() || "") + (r[10]?.trim() || "")
-    }));
-
-    // 2. เรียงลำดับตามพิกัด XY และวันที่ [cite: 223]
-    data.sort((a, b) => a.xy.localeCompare(b.xy) || a.date.localeCompare(b.date));
-
-    let pairResults = {};
-
-    // 3. วิเคราะห์หาคู่เวย์พอยท์ที่ทับซ้อนกัน [cite: 272, 278]
-    for (let i = 0; i < data.length; i++) {
-        let current = data[i];
-        
-        for (let j = i + 1; j < data.length; j++) {
-            let next = data[j];
-            
-            // ถ้าพิกัดต่างกันแล้วให้หยุดลูปในกลุ่มนี้
-            if (current.xy !== next.xy) break;
-
-            // เงื่อนไข: พิกัดเดียวกัน แต่คนละวันที่ และคนละรหัสเส้น [cite: 272]
-            if (current.date !== next.date && current.patrolId !== next.patrolId) {
-                // สร้างชื่อคู่เส้นโดยคงลำดับให้แน่นอน
-                let pairNames = [current.patrolId, next.patrolId].sort();
-                let pairKey = pairNames.join(" กับ ");
-                
-                if (!pairResults[pairKey]) {
-                    pairResults[pairKey] = { count: 0, wpPairs: [] };
-                }
-                
-                pairResults[pairKey].count += 1;
-                // เก็บข้อมูลการจับคู่รหัสเวย์พอยท์
-                // ระบุว่า WP ของเส้นที่หนึ่ง ตรงกับ WP ของเส้นที่สอง
-                let wpDetail = (current.patrolId === pairNames[0]) 
-                    ? `WP:${current.waypointId} ↔ WP:${next.waypointId}`
-                    : `WP:${next.waypointId} ↔ WP:${current.waypointId}`;
-                
-                pairResults[pairKey].wpPairs.push(wpDetail);
-            }
-        }
-    }
-
-    renderTable(pairResults);
-}
-
-function renderTable(results) {
-    const area = document.getElementById('resultArea');
-    let html = '<table><thead><tr>' +
-               '<th>คู่เส้นลาดตระเวน (เส้นซ้ำ) [cite: 276]</th>' +
-               '<th>จำนวนจุดซ้ำ (คู่) [cite: 281]</th>' +
-               '<th>รายละเอียดการจับคู่เวย์พอยท์ (พิกัดเดียวกัน)</th>' +
-               '<th>สถานะ </th>' +
-               '</tr></thead><tbody>';
-
-    let foundData = false;
-    for (const [pair, info] of Object.entries(results)) {
-        // แสดงผลเฉพาะที่ซ้ำ >= 20 จุดตามคู่มือ 
-        if (info.count >= 20) {
-            // สร้างรายการเวย์พอยท์แบบบรรทัดต่อบรรทัด
-            const wpListHtml = info.wpPairs.map(p => `<span class="wp-item">${p}</span>`).join("");
-            
-            html += `<tr>
-                <td><b>${pair}</b></td>
-                <td class="count-cell">${info.count}</td>
-                <td class="wp-pair-list">${wpListHtml}</td>
-                <td class="status-cell">ตรวจสอบใน SMART</td>
-            </tr>`;
-            foundData = true;
-        }
-    }
-
-    if (!foundData) {
-        html += '<tr><td colspan="4" style="text-align:center;">ไม่พบข้อมูลที่ซ้ำกันเกิน 20 จุด</td></tr>';
-    }
-
-    html += '</tbody></table>';
-    area.innerHTML = html;
-}
-</script>
-
-</body>
-</html>
