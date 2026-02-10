@@ -2,17 +2,18 @@
 <html lang="th">
 <head>
     <meta charset="UTF-8">
-    <title>เครื่องมือตรวจสอบข้อมูลซ้ำ - SMART Patrol</title>
+    <title>SMART Patrol - Duplicate Checker (Waypoint Pair Mode)</title>
     <style>
         body { font-family: 'Sarabun', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         .header { text-align: center; border-bottom: 3px solid #28a745; margin-bottom: 25px; padding-bottom: 10px; }
         .upload-area { border: 2px dashed #28a745; padding: 40px; text-align: center; cursor: pointer; background: #e9f7ef; border-radius: 8px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 25px; background: white; }
-        th, td { border: 1px solid #dee2e6; padding: 12px; text-align: left; }
+        table { width: 100%; border-collapse: collapse; margin-top: 25px; }
+        th, td { border: 1px solid #dee2e6; padding: 12px; text-align: left; vertical-align: top; }
         th { background-color: #28a745; color: white; text-align: center; }
-        .count-cell { text-align: center; font-weight: bold; color: #d9534f; font-size: 1.1em; }
-        .wp-list { font-size: 0.85em; color: #555; word-break: break-all; max-width: 400px; }
+        .count-cell { text-align: center; font-weight: bold; color: #d9534f; }
+        .wp-pair-list { font-size: 0.85em; color: #444; line-height: 1.6; }
+        .wp-item { display: block; margin-bottom: 4px; border-bottom: 1px dotted #ccc; padding-bottom: 2px; }
         .status-cell { text-align: center; font-weight: bold; color: #dc3545; }
     </style>
 </head>
@@ -20,8 +21,8 @@
 
 <div class="container">
     <div class="header">
-        <h2>เครื่องมือตรวจสอบการรายงานข้อมูลซ้ำ (SMART Patrol)</h2>
-        <p>อ้างอิงคอลัมน์: A (รหัสเส้น), G (รหัสเวย์พอยท์), H (วันที่), J (X), K (Y)</p>
+        <h2>เครื่องมือตรวจสอบการรายงานข้อมูลซ้ำ (ระบุคู่เวย์พอยท์)</h2>
+        <p>แสดงผลลัพธ์: คู่เส้นที่มีจุดซ้ำ >= 20 จุด พร้อมระบุรหัสเวย์พอยท์ที่ตรงกันรายจุด </p>
     </div>
     
     <div class="upload-area" onclick="document.getElementById('fileInput').click()">
@@ -38,7 +39,7 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.readAsText(file, "TIS-620"); // รองรับภาษาไทยจากไฟล์ SMART
+    reader.readAsText(file, "TIS-620"); // รองรับภาษาไทย [cite: 128]
 
     reader.onload = function(event) {
         const rows = event.target.result.split(/\r?\n/).map(row => row.split(','));
@@ -49,41 +50,48 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
 function processSmartData(rows) {
     if (rows.length < 2) return;
 
-    // 1. ดึงข้อมูลและสร้าง XY (อ้างอิงคอลัมน์ตามคู่มือ)
+    // 1. ดึงข้อมูลพื้นฐาน [cite: 221, 277]
+    // A: รหัสเส้น, G: รหัสเวย์พอยท์, H: วันที่, J: X, K: Y
     let data = rows.slice(1).filter(r => r.length > 10).map(r => ({
-        patrolId: r[0]?.trim(),    // คอลัมน์ A: รหัสเส้นลาดตระเวน
-        waypointId: r[6]?.trim(),  // คอลัมน์ G: รหัสเวย์พอยท์
-        date: r[7]?.trim(),        // คอลัมน์ H: วันที่ของเวย์พอยท์
-        xy: (r[9]?.trim() || "") + (r[10]?.trim() || "") // คอลัมน์ L: ค่า XY
+        patrolId: r[0]?.trim(),
+        waypointId: r[6]?.trim(),
+        date: r[7]?.trim(),
+        xy: (r[9]?.trim() || "") + (r[10]?.trim() || "")
     }));
 
-    // 2. เรียงลำดับตาม XY และวันที่ (เพื่อให้จุดที่พิกัดเหมือนกันมาอยู่ใกล้กัน)
+    // 2. เรียงลำดับตามพิกัด XY และวันที่ [cite: 223]
     data.sort((a, b) => a.xy.localeCompare(b.xy) || a.date.localeCompare(b.date));
 
-    // 3. วิเคราะห์หาคู่เส้นที่ซ้ำกัน
     let pairResults = {};
 
+    // 3. วิเคราะห์หาคู่เวย์พอยท์ที่ทับซ้อนกัน [cite: 272, 278]
     for (let i = 0; i < data.length; i++) {
         let current = data[i];
         
-        // เปรียบเทียบกับจุดอื่นๆ ในไฟล์ที่มีพิกัดเดียวกันแต่คนละวันที่ (Logic หน้า 10)
         for (let j = i + 1; j < data.length; j++) {
             let next = data[j];
             
-            // ถ้าพิกัด (XY) ต่างกันแล้ว ให้หยุดหาในกลุ่มนี้
+            // ถ้าพิกัดต่างกันแล้วให้หยุดลูปในกลุ่มนี้
             if (current.xy !== next.xy) break;
 
-            // ถ้าพิกัดเดียวกันแต่ต่างวันที่ และคนละรหัสเส้น (เงื่อนไขการซ้ำ)
+            // เงื่อนไข: พิกัดเดียวกัน แต่คนละวันที่ และคนละรหัสเส้น [cite: 272]
             if (current.date !== next.date && current.patrolId !== next.patrolId) {
-                let pairKey = [current.patrolId, next.patrolId].sort().join(", ");
+                // สร้างชื่อคู่เส้นโดยคงลำดับให้แน่นอน
+                let pairNames = [current.patrolId, next.patrolId].sort();
+                let pairKey = pairNames.join(" กับ ");
                 
                 if (!pairResults[pairKey]) {
-                    pairResults[pairKey] = { count: 0, waypoints: new Set() };
+                    pairResults[pairKey] = { count: 0, wpPairs: [] };
                 }
                 
                 pairResults[pairKey].count += 1;
-                if (current.waypointId) pairResults[pairKey].waypoints.add(current.waypointId);
-                if (next.waypointId) pairResults[pairKey].waypoints.add(next.waypointId);
+                // เก็บข้อมูลการจับคู่รหัสเวย์พอยท์
+                // ระบุว่า WP ของเส้นที่หนึ่ง ตรงกับ WP ของเส้นที่สอง
+                let wpDetail = (current.patrolId === pairNames[0]) 
+                    ? `WP:${current.waypointId} ↔ WP:${next.waypointId}`
+                    : `WP:${next.waypointId} ↔ WP:${current.waypointId}`;
+                
+                pairResults[pairKey].wpPairs.push(wpDetail);
             }
         }
     }
@@ -94,29 +102,31 @@ function processSmartData(rows) {
 function renderTable(results) {
     const area = document.getElementById('resultArea');
     let html = '<table><thead><tr>' +
-               '<th>คู่เส้นลาดตระเวน (เส้นซ้ำ)</th>' +
-               '<th>จำนวนจุดที่ซ้ำ (count)</th>' +
-               '<th>รหัสเวย์พอยท์ที่พบการซ้ำ</th>' +
-               '<th>สถานะ</th>' +
+               '<th>คู่เส้นลาดตระเวน (เส้นซ้ำ) [cite: 276]</th>' +
+               '<th>จำนวนจุดซ้ำ (คู่) [cite: 281]</th>' +
+               '<th>รายละเอียดการจับคู่เวย์พอยท์ (พิกัดเดียวกัน)</th>' +
+               '<th>สถานะ </th>' +
                '</tr></thead><tbody>';
 
     let foundData = false;
     for (const [pair, info] of Object.entries(results)) {
-        // กรองเฉพาะที่ซ้ำมากกว่า 20 จุดตามเกณฑ์หน้า 14
+        // แสดงผลเฉพาะที่ซ้ำ >= 20 จุดตามคู่มือ 
         if (info.count >= 20) {
-            const wpList = Array.from(info.waypoints).sort().join(", ");
+            // สร้างรายการเวย์พอยท์แบบบรรทัดต่อบรรทัด
+            const wpListHtml = info.wpPairs.map(p => `<span class="wp-item">${p}</span>`).join("");
+            
             html += `<tr>
                 <td><b>${pair}</b></td>
                 <td class="count-cell">${info.count}</td>
-                <td class="wp-list">${wpList}</td>
-                <td class="status-cell">ต้องตรวจสอบใน SMART</td>
+                <td class="wp-pair-list">${wpListHtml}</td>
+                <td class="status-cell">ตรวจสอบใน SMART</td>
             </tr>`;
             foundData = true;
         }
     }
 
     if (!foundData) {
-        html += '<tr><td colspan="4" style="text-align:center;">ไม่พบข้อมูลซ้ำที่เกินเกณฑ์ 20 จุด</td></tr>';
+        html += '<tr><td colspan="4" style="text-align:center;">ไม่พบข้อมูลที่ซ้ำกันเกิน 20 จุด</td></tr>';
     }
 
     html += '</tbody></table>';
